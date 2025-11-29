@@ -4,6 +4,7 @@
   testers,
   rustPlatform,
   fetchFromGitHub,
+  cacert,
   opendeck,
 
   # OpenDeck specific dependencies
@@ -29,6 +30,12 @@
   pango,
   webkitgtk_4_1,
   openssl,
+
+  # Plugin dependencies
+  libxkbcommon,
+  wayland,
+  xorg,
+  autoPatchelfHook,
 }:
 
 let
@@ -51,7 +58,7 @@ let
     maintainers = with lib.maintainers; [ Kitt3120 ];
   };
 
-  # We have to build the frontend separately and hand it to the backend rust build
+  # We have to build the frontend separately, and hand it to the backend rust build
   frontend = stdenv.mkDerivation {
     pname = "opendeck-frontend";
     inherit version src;
@@ -60,14 +67,9 @@ let
 
     # Make this a Fixed Output Derivation since we need to allow network access for Deno to download dependencies
     outputHashMode = "recursive";
-    outputHash = "sha256-p0jO7TiEWz8ntQljZsTyfX1/a7xZDogBptYxvqWbhtU=";
+    outputHash = "sha256-dgoU99PDIceaBpwt96/JUICHHKUZ73O0ubtx8i+l4w0=";
 
-    # We have to copy deno.lock to the build directory for deno to work correctly
-    postPatch = ''
-      cp ./deno.lock deno.lock
-    '';
-
-    # Deno will handle downloading and caching dependencies
+    # Deno will handle downloading dependencies. That's why we enable network access here.
     buildPhase = ''
       runHook preBuild
 
@@ -78,7 +80,7 @@ let
       runHook postBuild
     '';
 
-    # Copy the built frontend to the pkg output
+    # Copy the built frontend to the pkg output, so we can use it in the backend build
     installPhase = ''
       runHook preInstall
       cp -r build/ $out
@@ -86,13 +88,124 @@ let
     '';
 
     meta = meta // {
-      # I don't know if this description will be shown on the website, so I added a disclaimer not to install this as a standalone package
-      description = "Web UI for OpenDeck. This is used for building the full OpenDeck application. Installing this as a standalone package is not recommended.";
+      description = "Web UI for OpenDeck. This is used for building the full OpenDeck application. Installing this as a standalone package is not recommended. Install opendeck instead.";
+    };
+  };
+
+  # We have to build the built-in plugins separately, and hand them to the backend rust build
+  # This is a two-stage process:
+  # - First we prepare deno dependencies in a FOD
+  # - Then we build the actual plugins with those dependencies cached
+  # This is the first stage: preparing deno dependencies
+  pluginDenoDeps = stdenv.mkDerivation {
+    pname = "opendeck-plugin-deno-deps";
+    inherit version src;
+
+    nativeBuildInputs = [ deno ];
+
+    outputHashMode = "recursive";
+    outputHash = "sha256-8ZkHsNSnQ+n0dWUV1pakUsR1Ke8MyzzWlc0VBetDwo8=";
+
+    buildPhase = ''
+      runHook preBuild
+
+      export DENO_DIR="$out"
+
+      # Cache deno dependencies for each plugin's build.ts
+      # We run deno cache on the build scripts to download their dependencies
+      for plugin in plugins/*; do
+        if [ -d "$plugin" ] && [ -f "$plugin/build.ts" ]; then
+          echo "Caching Deno dependencies for $(basename "$plugin")"
+          deno cache --allow-scripts "$plugin/build.ts"
+        fi
+      done
+
+      runHook postBuild
+    '';
+
+    # DENO_DIR is already set to $out, so we don't have to copy anything
+    installPhase = ''
+      runHook preInstall
+      runHook postInstall
+    '';
+
+    meta = meta // {
+      description = "Cached Deno dependencies for building OpenDeck plugins. This is used for building the full OpenDeck application. Installing this as a standalone package is not recommended. Install opendeck instead.";
+    };
+  };
+
+  # This is the second stage: building the actual plugins with cached deno dependencies
+  plugins = stdenv.mkDerivation {
+    pname = "opendeck-plugins";
+    inherit version src;
+
+    nativeBuildInputs = [
+      deno
+      cargo
+      rustPlatform.cargoSetupHook
+      autoPatchelfHook
+    ];
+
+    buildInputs = [
+      libxkbcommon
+      wayland
+      xorg.libX11
+      xorg.libXrandr
+      xorg.libXi
+      stdenv.cc.cc.lib
+    ];
+
+    # Copy the Cargo.lock from the plugin
+    postUnpack = ''
+      cp "$sourceRoot/plugins/com.amansprojects.starterpack.sdPlugin/Cargo.lock" "$sourceRoot/"
+    '';
+
+    cargoDeps = rustPlatform.importCargoLock {
+      lockFile = ./starterpack-Cargo.lock;
+    };
+
+    buildPhase = ''
+      runHook preBuild
+
+      export DENO_DIR="${pluginDenoDeps}"
+      export HOME="$TMPDIR"
+      export CARGO_HOME="$TMPDIR/cargo"
+
+      mkdir -p target/plugins
+
+      # Build each plugin (currently just starterpack)
+      for plugin in plugins/*; do
+        if [ -d "$plugin" ]; then
+          plugin_name=$(basename "$plugin")
+          plugin_out="$PWD/target/plugins/$plugin_name"
+          
+          echo "Building plugin: $plugin_name"
+          cd "$plugin"
+          deno run --allow-all build.ts "$plugin_out" "${stdenv.hostPlatform.rust.rustcTarget}"
+          cd "$OLDPWD"
+        fi
+      done
+
+      runHook postBuild
+    '';
+
+    # Copy built plugins to $out to be used in the backend build
+    installPhase = ''
+      runHook preInstall
+
+      mkdir -p $out
+      cp -r target/plugins/* $out/
+
+      runHook postInstall
+    '';
+
+    meta = meta // {
+      description = "Built-in plugins for OpenDeck. This is used for building the full OpenDeck application. Installing this as a standalone package is not recommended. Install opendeck instead.";
     };
   };
 in
 
-# Build the actual OpenDeck package, using the pre-built frontend
+# Build the actual OpenDeck package, using the pre-built frontend and plugins
 rustPlatform.buildRustPackage {
   pname = "opendeck";
   inherit version src;
@@ -142,16 +255,23 @@ rustPlatform.buildRustPackage {
 
   # We have to copy Cargo.lock to the root for buildRustPackage so it can find it
   postUnpack = ''
-    # Copy Cargo.lock to root for buildRustPackage
     cp "$sourceRoot/src-tauri/Cargo.lock" "$sourceRoot/"
   '';
 
-  # - Copies the built frontend into the expected location and fixes tauri.conf.json
-  # - Disables plugin building since it requires network access
+  # - Copies the pre-built frontend into the expected location
+  # - Copies the pre-built plugins into the expected location
+  # - Patches tauri.conf.json
+  # - Patches the build.rs to not build plugins since we pre-built them
+  # - Copies the pre-built plugins into the expected location
   # - Patch libappindicator to use the correct library path
   postPatch = ''
-    # Copy pre-built frontend /devUrl
+    # Copy pre-built frontend
     cp -r ${frontend} build/
+
+    # Copy pre-built plugins
+    mkdir -p src-tauri/target/plugins
+    cp -r ${plugins}/* src-tauri/target/plugins/
+    chmod -R +w src-tauri/target/plugins
 
     # Remove beforeBuildCommand/beforeDevCommand because we already built the frontend
     substituteInPlace src-tauri/tauri.conf.json \
@@ -163,8 +283,7 @@ rustPlatform.buildRustPackage {
     substituteInPlace src-tauri/tauri.conf.json \
       --replace-fail $',\n\t\t"devUrl": "http://localhost:5173"' ""
 
-    # Disable plugin building in build.rs since it requires network access
-    # Replace the plugin building code with a no-op
+    # Disable plugin building in build.rs since we pre-built them
     substituteInPlace src-tauri/build.rs \
       --replace-fail 'for entry in fs::read_dir("../plugins")?.flatten()' 'for entry in std::iter::empty::<std::fs::DirEntry>()'
 
@@ -173,30 +292,29 @@ rustPlatform.buildRustPackage {
       --replace-fail 'libayatana-appindicator3.so.1' '${libayatana-appindicator}/lib/libayatana-appindicator3.so.1'
   '';
 
-  # We create an empty plugins directory to satisfy the build process
-  preBuild = ''
-    # Create empty plugins directory
-    mkdir -p src-tauri/target/plugins
-  '';
-
-  # We add support for the Stream Deck Mini (Discord Edition)
-  # We install the provided udev rules for Stream Deck devices
-  # TODO: Upstream Stream Deck Mini (Discord Edition) support
+  # - Install udev rules for Stream Deck devices
+  # - Install built-in plugins
   postInstall = ''
     # Install udev rules for Stream Deck devices
     install -Dm644 src-tauri/bundle/40-streamdeck.rules -t $out/lib/udev/rules.d/
 
-    # Add Stream Deck Mini (Discord Edition) support
-    # Add vendor=0fd9 product=00b3
-    echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="00b3", MODE="0666", TAG+="uaccess"' >> $out/lib/udev/rules.d/40-streamdeck.rules
-    echo 'KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="003", MODE="0666", TAG+="uaccess"' >> $out/lib/udev/rules.d/40-streamdeck.rules
+    # Install built-in plugins
+    mkdir -p $out/share
+    cp -r src-tauri/target/plugins $out/share/
+  '';
+
+  # Set APPDIR so Tauri can find resources
+  preFixup = ''
+    gappsWrapperArgs+=(
+      --set APPDIR "$out"
+    )
   '';
 
   passthru = {
     tests.version = testers.testVersion {
       package = opendeck;
     };
-    inherit frontend;
+    inherit frontend pluginDenoDeps plugins;
   };
 
   inherit meta;
