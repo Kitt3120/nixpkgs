@@ -8,6 +8,8 @@
   opendeck,
 
   # OpenDeck specific dependencies
+  deno,
+  wrapGAppsHook3,
   systemd,
   libayatana-appindicator,
 
@@ -15,9 +17,6 @@
   pkg-config,
   gobject-introspection,
   cargo,
-  cargo-tauri,
-  deno,
-  wrapGAppsHook3,
   at-spi2-atk,
   atkmm,
   cairo,
@@ -219,7 +218,6 @@ rustPlatform.buildRustPackage {
     pkg-config
     gobject-introspection
     cargo
-    cargo-tauri
   ];
 
   buildInputs = [
@@ -264,6 +262,7 @@ rustPlatform.buildRustPackage {
   # - Patch libappindicator to use the correct library path
   # - Copies the pre-built frontend into the expected location
   # - Copies the pre-built plugins into the expected location
+  # - Fix udev rules for Stream Deck Mini (Discord Edition)
   postPatch = ''
     # Disable the frontend building in tauri.conf.json since we pre-built it
     substituteInPlace src-tauri/tauri.conf.json \
@@ -290,6 +289,11 @@ rustPlatform.buildRustPackage {
     mkdir -p src-tauri/target/plugins
     cp -r ${plugins}/* src-tauri/target/plugins/
     chmod -R +w src-tauri/target/plugins
+
+    # TODO: Remove this hack once the official repo has fixed udev rules
+    # Fix udev rules for Stream Deck Mini (Discord Edition)
+    echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="00b3", MODE="0660", TAG+="uaccess"' >> src-tauri/bundle/40-streamdeck.rules
+    echo 'KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="00b3", MODE="0660", TAG+="uaccess"' >> src-tauri/bundle/40-streamdeck.rules
   '';
 
   # - Install udev rules for Stream Deck devices
