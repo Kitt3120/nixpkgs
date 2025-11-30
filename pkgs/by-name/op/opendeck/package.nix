@@ -102,6 +102,7 @@ let
 
     nativeBuildInputs = [ deno ];
 
+    # Make this a Fixed Output Derivation since we need to allow network access for Deno to download dependencies
     outputHashMode = "recursive";
     outputHash = "sha256-7gP2resKtTa/4MJcL0SuDWTIA/yimIREu9lNL5kyTFs=";
 
