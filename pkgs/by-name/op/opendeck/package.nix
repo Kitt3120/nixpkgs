@@ -39,13 +39,13 @@
 }:
 
 let
-  version = "2.7.0";
+  version = "4c8f62bcb96187ae0bb318f9666fa94df56bdde4";
 
   src = fetchFromGitHub {
     owner = "nekename";
     repo = "opendeck";
-    rev = "v${version}";
-    hash = "sha256-j6xoSx0citqQzglkOHzW788RzOpdSPCh5QRVR9JaZO0=";
+    rev = version;
+    hash = "sha256-uA8MQUpoBlpMy4EB38/Flw7rTCUQNUY/djoSFK/J6L0=";
   };
 
   meta = {
@@ -67,7 +67,7 @@ let
 
     # Make this a Fixed Output Derivation since we need to allow network access for Deno to download dependencies
     outputHashMode = "recursive";
-    outputHash = "sha256-dgoU99PDIceaBpwt96/JUICHHKUZ73O0ubtx8i+l4w0=";
+    outputHash = "sha256-e7+LaYOLZhGIs0MHf5b7WWJG/W2o5JPTsmVobH2zOCo=";
 
     # Deno will handle downloading dependencies. That's why we enable network access here.
     buildPhase = ''
@@ -104,7 +104,7 @@ let
     nativeBuildInputs = [ deno ];
 
     outputHashMode = "recursive";
-    outputHash = "sha256-8ZkHsNSnQ+n0dWUV1pakUsR1Ke8MyzzWlc0VBetDwo8=";
+    outputHash = "sha256-7gP2resKtTa/4MJcL0SuDWTIA/yimIREu9lNL5kyTFs=";
 
     buildPhase = ''
       runHook preBuild
@@ -258,13 +258,31 @@ rustPlatform.buildRustPackage {
     cp "$sourceRoot/src-tauri/Cargo.lock" "$sourceRoot/"
   '';
 
+  # - Patches tauri.conf.json to not build the frontend since we pre-built it
+  # - Patches the build.rs to not build plugins since we pre-built them
+  # - Fixes the frontend not connecting to the backend by removing the devUrl
+  # - Patch libappindicator to use the correct library path
   # - Copies the pre-built frontend into the expected location
   # - Copies the pre-built plugins into the expected location
-  # - Patches tauri.conf.json
-  # - Patches the build.rs to not build plugins since we pre-built them
-  # - Copies the pre-built plugins into the expected location
-  # - Patch libappindicator to use the correct library path
   postPatch = ''
+    # Disable the frontend building in tauri.conf.json since we pre-built it
+    substituteInPlace src-tauri/tauri.conf.json \
+      --replace-fail '"beforeBuildCommand": "deno task build",' '"beforeBuildCommand": "",' \
+      --replace-fail '"beforeDevCommand": "deno task dev",' '"beforeDevCommand": "",' \
+
+    # Disable plugin building in build.rs since we pre-built them
+    substituteInPlace src-tauri/build.rs \
+      --replace-fail 'for entry in fs::read_dir("../plugins")?.flatten()' 'for entry in std::iter::empty::<std::fs::DirEntry>()'
+
+    # Replace the devUrl with an empty string.
+    # Don't ask me why but this fixes the frontend not connecting to the backend.
+    substituteInPlace src-tauri/tauri.conf.json \
+      --replace-fail $',\n\t\t"devUrl": "http://localhost:5173"' ""
+
+    # Patch libappindicator to use the correct library path
+    substituteInPlace $cargoDepsCopy/libappindicator-sys-*/src/lib.rs \
+      --replace-fail 'libayatana-appindicator3.so.1' '${libayatana-appindicator}/lib/libayatana-appindicator3.so.1'
+
     # Copy pre-built frontend
     cp -r ${frontend} build/
 
@@ -272,24 +290,6 @@ rustPlatform.buildRustPackage {
     mkdir -p src-tauri/target/plugins
     cp -r ${plugins}/* src-tauri/target/plugins/
     chmod -R +w src-tauri/target/plugins
-
-    # Remove beforeBuildCommand/beforeDevCommand because we already built the frontend
-    substituteInPlace src-tauri/tauri.conf.json \
-      --replace-fail '"beforeBuildCommand": "deno task build",' '"beforeBuildCommand": "",' \
-      --replace-fail '"beforeDevCommand": "deno task dev",' '"beforeDevCommand": "",' \
-
-    # Replace the devUrl with an empty string.
-    # Don't ask me why but this fixes the frontend not connecting to the backend.
-    substituteInPlace src-tauri/tauri.conf.json \
-      --replace-fail $',\n\t\t"devUrl": "http://localhost:5173"' ""
-
-    # Disable plugin building in build.rs since we pre-built them
-    substituteInPlace src-tauri/build.rs \
-      --replace-fail 'for entry in fs::read_dir("../plugins")?.flatten()' 'for entry in std::iter::empty::<std::fs::DirEntry>()'
-
-    # Patch libappindicator to use the correct library path
-    substituteInPlace $cargoDepsCopy/libappindicator-sys-*/src/lib.rs \
-      --replace-fail 'libayatana-appindicator3.so.1' '${libayatana-appindicator}/lib/libayatana-appindicator3.so.1'
   '';
 
   # - Install udev rules for Stream Deck devices
