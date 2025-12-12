@@ -106,7 +106,7 @@ let
 
     # Make this a Fixed Output Derivation for network access
     outputHashMode = "recursive";
-    outputHash = "sha256-Oxsvy2EXd67MbFcAcvxljOSW1BDJNu1+dbeH9w2OADc=";
+    outputHash = "sha256-H+lm3rqFCKz0d/hBtZzFPpBG66/Ic1eqmdUMKhRtpU8=";
 
     meta = meta // {
       description = "Web UI for OpenDeck. This is used for building the full OpenDeck application. Installing this as a standalone package is not recommended. Install opendeck instead.";
@@ -144,7 +144,7 @@ let
 
     # Make this a Fixed Output Derivation for network access
     outputHashMode = "recursive";
-    outputHash = "sha256-SBLWdkfNMyNyh5yFYrpaOtluaSL6PbIGEo/0PvgKwes=";
+    outputHash = "sha256-XQRS/Tissxe6BFgeki/LrMj8ihwotqsEQG7WL91YrBE=";
 
     meta = meta // {
       description = "Cached Deno dependencies for building OpenDeck plugins. This is used for building the full OpenDeck application. Installing this as a standalone package is not recommended. Install opendeck instead.";
@@ -293,7 +293,8 @@ rustPlatform.buildRustPackage {
     # Copy pre-built frontend
     cp -r ${frontend} build/
 
-    # Copy pre-built plugins
+    # Copy pre-built plugins for build-time bundling
+    # Tauri needs these during build to validate the resources configuration
     mkdir -p src-tauri/target/plugins
     cp -r ${plugins}/* src-tauri/target/plugins/
     chmod -R +w src-tauri/target/plugins
@@ -306,18 +307,18 @@ rustPlatform.buildRustPackage {
   postInstall = ''
     # Install udev rules for Stream Deck devices
     install -Dm644 src-tauri/bundle/40-streamdeck.rules -t $out/lib/udev/rules.d/
-
-    # Install built-in plugins
-    mkdir -p $out/share
-    cp -r src-tauri/target/plugins $out/share/
   '';
 
   preFixup = ''
+    # Install plugins at the hardcoded path the app expects
+    # The app tries to access $out/usr/lib/opendeck/plugins for builtin plugins
+    mkdir -p $out/usr/lib/opendeck/plugins
+    cp -r ${plugins}/* $out/usr/lib/opendeck/plugins/
+
     gappsWrapperArgs+=(
       --set APPDIR "$out"
     )
   '';
-
   passthru = {
     tests.version = testers.testVersion {
       package = opendeck;
