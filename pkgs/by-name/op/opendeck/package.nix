@@ -321,11 +321,6 @@ rustPlatform.buildRustPackage {
     chmod -R +w src-tauri/target/plugins
   '';
 
-  # - Install udev rules that come with OpenDeck
-  postInstall = ''
-    install -Dm644 src-tauri/bundle/40-streamdeck.rules -t $out/lib/udev/rules.d/
-  '';
-
   # - Install plugins to the hardcoded path the app expects
   # - The app tries to access $out/usr/lib/opendeck/plugins for builtin plugins
   # - Set APPDIR environment variable for OpenDeck to find its resources
@@ -336,6 +331,11 @@ rustPlatform.buildRustPackage {
     gappsWrapperArgs+=(
       --set APPDIR "$out"
     )
+  '';
+
+  # - Install udev rules that come with OpenDeck
+  postInstall = ''
+    install -Dm644 src-tauri/bundle/40-streamdeck.rules -t $out/lib/udev/rules.d/
   '';
 
   passthru = {
