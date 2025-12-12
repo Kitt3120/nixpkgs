@@ -39,55 +39,76 @@
 }:
 
 let
+  # Version and source information
   version = "2.7.1";
+  srcHash = "sha256-NZ+gHtaqWngBzs3/sD8JYPYwPpgol6LJUCSCSHx7jCc=";
 
+  # Enigo dependency information
+  enigoRev = "4cb8833144e6e5e679b91ae7fd53507f9abf751d";
+  enigoHash = "sha256-zcxgs30L5dQiq/tJNUla6rwZvS2FGOc0O7tTDKifLPo=";
+
+  # FOD output hashes
+  frontendHash = "sha256-dPs5Nut4tDzQeWRSBMtsP8umil9W4ek7r0C2Fs6G+Ck=";
+  pluginDenoDepsHash = "sha256-/u3sx6HtTDiTKzY9lJMSLXKjQ9yCFf0TzTjQj8rg61g=";
+
+  # Additional output hashes of cargo dependencies that need to be specified
+  cargoOutputHashes = {
+    "fix-path-env-0.0.0" = "sha256-UygkxJZoiJlsgp8PLf1zaSVsJZx1GGdQyTXqaFv3oGk=";
+  };
+
+  # Main OpenDeck source. Used for building the frontend, plugins, and main opendeck derivation
   src = fetchFromGitHub {
     owner = "nekename";
     repo = "opendeck";
     rev = "v${version}";
-    hash = "sha256-NZ+gHtaqWngBzs3/sD8JYPYwPpgol6LJUCSCSHx7jCc=";
+    hash = srcHash;
   };
 
-  meta = {
-    description = "Linux software for the Elgato Stream Deck with support for original Stream Deck plugins";
-    license = lib.licenses.mit;
-    platforms = lib.platforms.linux;
-    homepage = "https://github.com/nekename/opendeck";
-    downloadPage = "https://github.com/nekename/opendeck/releases/tag/v${version}";
-    changelog = "https://github.com/nekename/opendeck/releases/tag/v${version}";
-    maintainers = with lib.maintainers; [ Kitt3120 ];
-  };
-
-  # Enigo library source - needed for plugins
+  # Enigo is a dependency needed for building the plugins
+  # We have to fetch it here as it is a git dependency in the plugins' Cargo.toml
+  # We will patch the plugins to use a path dependency instead
   enigoSrc = fetchFromGitHub {
     owner = "enigo-rs";
     repo = "enigo";
-    rev = "4cb8833144e6e5e679b91ae7fd53507f9abf751d";
-    hash = "sha256-zcxgs30L5dQiq/tJNUla6rwZvS2FGOc0O7tTDKifLPo=";
+    rev = enigoRev;
+    hash = enigoHash;
   };
 
-  # Prepare enigo source with Cargo.lock for path dependency
-  enigo = stdenv.mkDerivation {
-    pname = "enigo-source";
+  # Enigo does not provide a Cargo.lock file, so we inject our vendored one here
+  enigoSrcWithCargoLock = stdenv.mkDerivation {
+    pname = "enigo-source-with-cargo-lock";
     version = "0.6.1-unstable-2024-11-14";
     src = enigoSrc;
 
     dontBuild = true;
 
+    # - Copies entire source to output
+    # - Additionally copies our vendored Cargo.lock file to the output
     installPhase = ''
       runHook preInstall
+
       mkdir -p $out
       cp -r * $out/
       cp ${./enigo-Cargo.lock} $out/Cargo.lock
+
       runHook postInstall
     '';
-  }; # Frontend - FOD with network access
+  };
+
+  # The frontend derivation
+  # We're building this as a Fixed Output Derivation since it requires network access
   frontend = stdenv.mkDerivation {
     pname = "opendeck-frontend";
     inherit version src;
 
+    # Makes this a Fixed Output Derivation for network access
+    outputHashMode = "recursive";
+    outputHash = frontendHash;
+
     nativeBuildInputs = [ deno ];
 
+    # - Sets the DENO_DIR to a temporary location to avoid polluting the Nix store
+    # - Builds the frontend using deno
     buildPhase = ''
       runHook preBuild
 
@@ -98,60 +119,51 @@ let
       runHook postBuild
     '';
 
+    # - Copies the built frontend from the build/ directory to the output
     installPhase = ''
       runHook preInstall
+
       cp -r build/ $out
+
       runHook postInstall
     '';
-
-    # Make this a Fixed Output Derivation for network access
-    outputHashMode = "recursive";
-    outputHash = "sha256-H+lm3rqFCKz0d/hBtZzFPpBG66/Ic1eqmdUMKhRtpU8=";
-
-    meta = meta // {
-      description = "Web UI for OpenDeck. This is used for building the full OpenDeck application. Installing this as a standalone package is not recommended. Install opendeck instead.";
-    };
   };
 
-  # Deno dependencies for plugins - FOD for downloading only
+  # We're building the plugins later.
+  # However, the plugins' build.ts files have deno dependencies.
+  # To avoid also having to build the plugins as FODs, we build only the deno dependencies here as a FOD.
+  # These will then be used when building the plugins.
   pluginDenoDeps = stdenv.mkDerivation {
     pname = "opendeck-plugin-deno-deps";
     inherit version src;
 
+    # Makes this a Fixed Output Derivation for network access
+    outputHashMode = "recursive";
+    outputHash = pluginDenoDepsHash;
+
     nativeBuildInputs = [ deno ];
 
+    # - Sets the DENO_DIR to the output
+    # - Caches the deno dependencies for each plugin's build.ts
     buildPhase = ''
       runHook preBuild
 
       export DENO_DIR="$out"
-
-      # Cache deno dependencies for each plugin's build.ts
       for plugin in plugins/*; do
         if [ -d "$plugin" ] && [ -f "$plugin/build.ts" ]; then
-          echo "Caching Deno dependencies for $(basename "$plugin")"
           deno cache --allow-scripts "$plugin/build.ts"
         fi
       done
 
       runHook postBuild
     '';
-
-    installPhase = ''
-      runHook preInstall
-      # DENO_DIR already points to $out
-      runHook postInstall
-    '';
-
-    # Make this a Fixed Output Derivation for network access
-    outputHashMode = "recursive";
-    outputHash = "sha256-XQRS/Tissxe6BFgeki/LrMj8ihwotqsEQG7WL91YrBE=";
-
-    meta = meta // {
-      description = "Cached Deno dependencies for building OpenDeck plugins. This is used for building the full OpenDeck application. Installing this as a standalone package is not recommended. Install opendeck instead.";
-    };
   };
 
-  # Plugins - regular build with vendored Cargo dependencies
+  # We can now build the plugins.
+  # This builds against our vendored starterpack-Cargo.lock to ensure reproducible builds.
+  # This uses the cached Deno dependencies from the previous derivation.
+  # This also uses our patched enigo source with Cargo.lock.
+  # To make this work, we patch each plugin's Cargo.toml to use a path dependency for enigo.
   plugins = stdenv.mkDerivation {
     pname = "opendeck-plugins";
     inherit version src;
@@ -176,19 +188,24 @@ let
       stdenv.cc.cc.lib
     ];
 
+    # Copy our vendored starterpack-Cargo.lock to the source root for cargoSetupPostPatchHook validation
+    # This must happen before patchPhase because cargoSetupPostPatchHook validates it
+    postUnpack = ''
+      cp ${./starterpack-Cargo.lock} $sourceRoot/Cargo.lock
+    '';
+
     # Patch plugin to use local enigo instead of git dependency
     postPatch = ''
-      # Copy the Cargo.lock to the root for cargo vendoring
-      cp ${./starterpack-Cargo.lock} Cargo.lock
-
       # Replace git dependency with path dependency in plugin's Cargo.toml
       for plugin in plugins/*/Cargo.toml; do
         if [ -f "$plugin" ]; then
-          sed -i 's|git = "https://github.com/enigo-rs/enigo.git", rev = "[^"]*",|path = "${enigo}",|g' "$plugin"
+          sed -i 's|git = "https://github.com/enigo-rs/enigo.git", rev = "[^"]*",|path = "${enigoSrcWithCargoLock}",|g' "$plugin"
         fi
       done
     '';
 
+    # - Sets DENO_DIR to the cached deno dependencies from previous derivation
+    # - Builds each plugin using its build.ts script
     buildPhase = ''
       runHook preBuild
 
@@ -197,14 +214,11 @@ let
       export CARGO_HOME="$TMPDIR/cargo"
 
       mkdir -p target/plugins
-
-      # Build each plugin
       for plugin in plugins/*; do
         if [ -d "$plugin" ]; then
           plugin_name=$(basename "$plugin")
           plugin_out="$PWD/target/plugins/$plugin_name"
           
-          echo "Building plugin: $plugin_name"
           cd "$plugin"
           deno run --allow-all build.ts "$plugin_out" "${stdenv.hostPlatform.rust.rustcTarget}"
           cd "$OLDPWD"
@@ -214,6 +228,7 @@ let
       runHook postBuild
     '';
 
+    # - Copies all built plugins from target/plugins/ to the output
     installPhase = ''
       runHook preInstall
 
@@ -222,14 +237,12 @@ let
 
       runHook postInstall
     '';
-
-    meta = meta // {
-      description = "Built-in plugins for OpenDeck. This is used for building the full OpenDeck application. Installing this as a standalone package is not recommended. Install opendeck instead.";
-    };
   };
 in
 
-# Build the actual OpenDeck package
+# Build the actual OpenDeck package.
+# This builds against our vendored Cargo.lock to ensure reproducible builds.
+# This uses the pre-built frontend and plugins.
 rustPlatform.buildRustPackage {
   pname = "opendeck";
   inherit version src;
@@ -264,32 +277,40 @@ rustPlatform.buildRustPackage {
 
   cargoLock = {
     lockFile = ./Cargo.lock;
-    outputHashes = {
-      "fix-path-env-0.0.0" = "sha256-UygkxJZoiJlsgp8PLf1zaSVsJZx1GGdQyTXqaFv3oGk=";
-    };
+    outputHashes = cargoOutputHashes;
   };
 
-  postPatch = ''
-    # Copy Cargo.lock to root for cargo vendoring
-    cp ${./Cargo.lock} Cargo.lock
+  # Copy our vendored Cargo.lock to the source root for cargoSetupPostPatchHook validation
+  # This must happen before patchPhase because cargoSetupPostPatchHook validates it
+  postUnpack = ''
+    cp ${./Cargo.lock} $sourceRoot/Cargo.lock
+  '';
 
-    # Disable the frontend building in tauri.conf.json since we pre-built it
+  # - Disable frontend and plugin building since we pre-built them
+  # - Remove devUrl to fix frontend-backend connection
+  # - Patch libappindicator to use correct library path
+  postPatch = ''
+    # Frontend
     substituteInPlace src-tauri/tauri.conf.json \
       --replace-fail '"beforeBuildCommand": "deno task build",' '"beforeBuildCommand": "",' \
-      --replace-fail '"beforeDevCommand": "deno task dev",' '"beforeDevCommand": "",'
+      --replace-fail '"beforeDevCommand": "deno task dev",' '"beforeDevCommand": "",'  
 
-    # Disable plugin building in build.rs since we pre-built them
+    # Plugins
     substituteInPlace src-tauri/build.rs \
       --replace-fail 'for entry in fs::read_dir("../plugins")?.flatten()' 'for entry in std::iter::empty::<std::fs::DirEntry>()'
 
-    # Remove the devUrl to fix frontend-backend connection
+    # devUrl removal
     substituteInPlace src-tauri/tauri.conf.json \
       --replace-fail $',\n\t\t"devUrl": "http://localhost:5173"' ""
 
-    # Patch libappindicator to use the correct library path
+    # libappindicator path fix
     substituteInPlace $cargoDepsCopy/libappindicator-sys-*/src/lib.rs \
       --replace-fail 'libayatana-appindicator3.so.1' '${libayatana-appindicator}/lib/libayatana-appindicator3.so.1'
+  '';
 
+  # - Copy pre-built frontend into build/ directory for Tauri to bundle
+  # - Copy pre-built plugins into src-tauri/target/plugins for Tauri to validate
+  preConfigure = ''
     # Copy pre-built frontend
     cp -r ${frontend} build/
 
@@ -298,20 +319,17 @@ rustPlatform.buildRustPackage {
     mkdir -p src-tauri/target/plugins
     cp -r ${plugins}/* src-tauri/target/plugins/
     chmod -R +w src-tauri/target/plugins
-
-    # Fix udev rules for Stream Deck Mini (Discord Edition)
-    echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="00b3", MODE="0660", TAG+="uaccess"' >> src-tauri/bundle/40-streamdeck.rules
-    echo 'KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="00b3", MODE="0660", TAG+="uaccess"' >> src-tauri/bundle/40-streamdeck.rules
   '';
 
+  # - Install udev rules that come with OpenDeck
   postInstall = ''
-    # Install udev rules for Stream Deck devices
     install -Dm644 src-tauri/bundle/40-streamdeck.rules -t $out/lib/udev/rules.d/
   '';
 
+  # - Install plugins to the hardcoded path the app expects
+  # - The app tries to access $out/usr/lib/opendeck/plugins for builtin plugins
+  # - Set APPDIR environment variable for OpenDeck to find its resources
   preFixup = ''
-    # Install plugins at the hardcoded path the app expects
-    # The app tries to access $out/usr/lib/opendeck/plugins for builtin plugins
     mkdir -p $out/usr/lib/opendeck/plugins
     cp -r ${plugins}/* $out/usr/lib/opendeck/plugins/
 
@@ -319,17 +337,26 @@ rustPlatform.buildRustPackage {
       --set APPDIR "$out"
     )
   '';
+
   passthru = {
     tests.version = testers.testVersion {
       package = opendeck;
     };
     inherit
-      enigo
+      enigoSrcWithCargoLock
       frontend
       pluginDenoDeps
       plugins
       ;
   };
 
-  inherit meta;
+  meta = {
+    description = "Linux software for the Elgato Stream Deck with support for original Stream Deck plugins";
+    license = lib.licenses.mit;
+    platforms = lib.platforms.linux;
+    homepage = "https://github.com/nekename/opendeck";
+    downloadPage = "https://github.com/nekename/opendeck/releases/tag/v${version}";
+    changelog = "https://github.com/nekename/opendeck/releases/tag/v${version}";
+    maintainers = with lib.maintainers; [ Kitt3120 ];
+  };
 }
