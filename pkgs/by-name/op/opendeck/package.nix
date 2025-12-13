@@ -334,8 +334,24 @@ rustPlatform.buildRustPackage {
   '';
 
   # - Install udev rules that come with OpenDeck
+  # - Install icon and create desktop file for desktop integration
   postInstall = ''
-    install -Dm644 src-tauri/bundle/40-streamdeck.rules -t $out/lib/udev/rules.d/
+        install -Dm644 src-tauri/bundle/40-streamdeck.rules -t $out/lib/udev/rules.d/
+        
+        # Install icon
+        install -Dm644 src-tauri/icons/icon.png $out/share/pixmaps/opendeck.png
+        
+        # Create desktop file
+        mkdir -p $out/share/applications
+        cat > $out/share/applications/opendeck.desktop << EOF
+    [Desktop Entry]
+    Name=OpenDeck
+    Comment=Control your Stream Deck on Linux
+    Exec=opendeck
+    Icon=opendeck
+    Type=Application
+    Categories=Utility;
+    EOF
   '';
 
   passthru = {
