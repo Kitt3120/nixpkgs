@@ -4,7 +4,6 @@
   testers,
   rustPlatform,
   fetchFromGitHub,
-  cacert,
   opendeck,
 
   # OpenDeck specific dependencies
@@ -13,6 +12,7 @@
   wrapGAppsHook3,
   systemd,
   libayatana-appindicator,
+  glib-networking,
 
   # Tauri dependencies
   pkg-config,
@@ -324,12 +324,14 @@ rustPlatform.buildRustPackage {
   # - Install plugins to the hardcoded path the app expects
   # - The app tries to access $out/usr/lib/opendeck/plugins for builtin plugins
   # - Set APPDIR environment variable for OpenDeck to find its resources
+  # - Set GIO_EXTRA_MODULES for glib-networking (required for HTTPS in WebKitGTK)
   preFixup = ''
     mkdir -p $out/usr/lib/opendeck/plugins
     cp -r ${plugins}/* $out/usr/lib/opendeck/plugins/
 
     gappsWrapperArgs+=(
       --set APPDIR "$out"
+      --prefix GIO_EXTRA_MODULES : "${glib-networking}/lib/gio/modules"
     )
   '';
 
