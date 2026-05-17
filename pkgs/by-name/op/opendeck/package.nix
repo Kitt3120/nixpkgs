@@ -33,7 +33,9 @@
   # Plugin dependencies
   libxkbcommon,
   wayland,
-  xorg,
+  libx11,
+  libxrandr,
+  libxi,
   autoPatchelfHook,
 }:
 
@@ -159,9 +161,9 @@ let
     buildInputs = [
       libxkbcommon
       wayland
-      xorg.libX11
-      xorg.libXrandr
-      xorg.libXi
+      libx11
+      libxrandr
+      libxi
       stdenv.cc.cc.lib
     ];
 
