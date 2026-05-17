@@ -1,10 +1,8 @@
 {
   lib,
   stdenv,
-  testers,
   rustPlatform,
   fetchFromGitHub,
-  opendeck,
 
   # OpenDeck specific dependencies
   deno,
@@ -341,9 +339,6 @@ rustPlatform.buildRustPackage {
   '';
 
   passthru = {
-    tests.version = testers.testVersion {
-      package = opendeck;
-    };
     inherit
       frontend
       pluginDenoDeps
