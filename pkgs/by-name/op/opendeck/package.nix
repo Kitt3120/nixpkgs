@@ -39,15 +39,15 @@
 
 let
   # Version and source information
-  version = "2.7.1";
-  srcHash = "sha256-NZ+gHtaqWngBzs3/sD8JYPYwPpgol6LJUCSCSHx7jCc=";
+  version = "2.12.0";
+  srcHash = "sha256-ZXYRCBFUBeoC8PFx3RY/yU9xc1bqZ6z9+72tMxDVczQ=";
 
   # Output hash for the enigo git dependency used in the starterpack plugin
   enigoHash = "sha256-zcxgs30L5dQiq/tJNUla6rwZvS2FGOc0O7tTDKifLPo=";
 
   # FOD output hashes
-  frontendHash = "sha256-bA493OBnAZE7uB7zYdGcdEK/E4/BwzRzA21amBWxPiM=";
-  pluginDenoDepsHash = "sha256-uyX7WhAI8uowTupdijpZ450jHddd1/YlaeCWnVl/DwM=";
+  frontendHash = "sha256-vbOp4tDiDtcdk5fblLiXELwZTTRcrkrycgZ7tXqDBac=";
+  pluginDenoDepsHash = "sha256-+1Y8PZjuQnY/u+2gdoSvkckosw8OhgbUd8aI+rq+z4I=";
 
   # Additional output hashes of cargo dependencies that need to be specified
   cargoOutputHashes = {
@@ -178,7 +178,7 @@ let
     # Patch build.ts to add --locked to cargo install so it uses the vendored enigo source
     postPatch = ''
       substituteInPlace plugins/com.amansprojects.starterpack.sdPlugin/build.ts \
-        --replace-fail '"--root", join(outDir, Deno.build.os)]' '"--root", join(outDir, Deno.build.os), "--locked"]'
+        --replace-fail '"--root", join(outDir, target)]' '"--root", join(outDir, target), "--locked"]'
     '';
 
     # - Sets DENO_DIR to the cached deno dependencies from previous derivation
