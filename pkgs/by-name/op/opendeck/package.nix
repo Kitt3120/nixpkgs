@@ -8,7 +8,6 @@
 
   # OpenDeck specific dependencies
   deno,
-  git,
   wrapGAppsHook3,
   systemd,
   libayatana-appindicator,
@@ -43,13 +42,12 @@ let
   version = "2.7.1";
   srcHash = "sha256-NZ+gHtaqWngBzs3/sD8JYPYwPpgol6LJUCSCSHx7jCc=";
 
-  # Enigo dependency information
-  enigoRev = "4cb8833144e6e5e679b91ae7fd53507f9abf751d";
+  # Output hash for the enigo git dependency used in the starterpack plugin
   enigoHash = "sha256-zcxgs30L5dQiq/tJNUla6rwZvS2FGOc0O7tTDKifLPo=";
 
   # FOD output hashes
-  frontendHash = "sha256-dPs5Nut4tDzQeWRSBMtsP8umil9W4ek7r0C2Fs6G+Ck=";
-  pluginDenoDepsHash = "sha256-/u3sx6HtTDiTKzY9lJMSLXKjQ9yCFf0TzTjQj8rg61g=";
+  frontendHash = "sha256-bA493OBnAZE7uB7zYdGcdEK/E4/BwzRzA21amBWxPiM=";
+  pluginDenoDepsHash = "sha256-uyX7WhAI8uowTupdijpZ450jHddd1/YlaeCWnVl/DwM=";
 
   # Additional output hashes of cargo dependencies that need to be specified
   cargoOutputHashes = {
@@ -64,37 +62,6 @@ let
     hash = srcHash;
   };
 
-  # Enigo is a dependency needed for building the plugins
-  # We have to fetch it here as it is a git dependency in the plugins' Cargo.toml
-  # We will patch the plugins to use a path dependency instead
-  enigoSrc = fetchFromGitHub {
-    owner = "enigo-rs";
-    repo = "enigo";
-    rev = enigoRev;
-    hash = enigoHash;
-  };
-
-  # Enigo does not provide a Cargo.lock file, so we inject our vendored one here
-  enigoSrcWithCargoLock = stdenv.mkDerivation {
-    pname = "enigo-source-with-cargo-lock";
-    version = "0.6.1-unstable-2024-11-14";
-    src = enigoSrc;
-
-    dontBuild = true;
-
-    # - Copies entire source to output
-    # - Additionally copies our vendored Cargo.lock file to the output
-    installPhase = ''
-      runHook preInstall
-
-      mkdir -p $out
-      cp -r * $out/
-      cp ${./enigo-Cargo.lock} $out/Cargo.lock
-
-      runHook postInstall
-    '';
-  };
-
   # The frontend derivation
   # We're building this as a Fixed Output Derivation since it requires network access
   frontend = stdenv.mkDerivation {
@@ -107,13 +74,17 @@ let
 
     nativeBuildInputs = [ deno ];
 
-    # - Sets the DENO_DIR to a temporary location to avoid polluting the Nix store
+    # - Uses our pinned deno.lock to ensure reproducible dependency resolution
     # - Builds the frontend using deno
+    preBuild = ''
+      cp ${./deno.lock} deno.lock
+    '';
+
     buildPhase = ''
       runHook preBuild
 
       export DENO_DIR="$TMPDIR/deno"
-      deno install
+      deno install --frozen
       deno task build
 
       runHook postBuild
@@ -143,8 +114,12 @@ let
 
     nativeBuildInputs = [ deno ];
 
-    # - Sets the DENO_DIR to the output
+    # - Uses our pinned deno.lock for reproducible dependency resolution
     # - Caches the deno dependencies for each plugin's build.ts
+    preBuild = ''
+      cp ${./deno.lock} deno.lock
+    '';
+
     buildPhase = ''
       runHook preBuild
 
@@ -162,14 +137,18 @@ let
   # We can now build the plugins.
   # This builds against our vendored starterpack-Cargo.lock to ensure reproducible builds.
   # This uses the cached Deno dependencies from the previous derivation.
-  # This also uses our patched enigo source with Cargo.lock.
-  # To make this work, we patch each plugin's Cargo.toml to use a path dependency for enigo.
+  # The enigo git dependency is vendored via importCargoLock outputHashes.
   plugins = stdenv.mkDerivation {
     pname = "opendeck-plugins";
     inherit version src;
 
+    # enigo is a git dependency in the starterpack plugin
+    # provide its hash here so importCargoLock can vendor it without network access at build time
     cargoDeps = rustPlatform.importCargoLock {
       lockFile = ./starterpack-Cargo.lock;
+      outputHashes = {
+        "enigo-0.6.1" = enigoHash;
+      };
     };
 
     nativeBuildInputs = [
@@ -188,20 +167,18 @@ let
       stdenv.cc.cc.lib
     ];
 
-    # Copy our vendored starterpack-Cargo.lock to the source root for cargoSetupPostPatchHook validation
-    # This must happen before patchPhase because cargoSetupPostPatchHook validates it
+    # Copy our pinned starterpack-Cargo.lock to:
+    # 1. $sourceRoot/Cargo.lock — for cargoSetupPostPatchHook lockfile validation
+    # 2. the plugin directory — so cargo uses our pinned lockfile during the build
     postUnpack = ''
       cp ${./starterpack-Cargo.lock} $sourceRoot/Cargo.lock
+      cp ${./starterpack-Cargo.lock} $sourceRoot/plugins/com.amansprojects.starterpack.sdPlugin/Cargo.lock
     '';
 
-    # Patch plugin to use local enigo instead of git dependency
+    # Patch build.ts to add --locked to cargo install so it uses the vendored enigo source
     postPatch = ''
-      # Replace git dependency with path dependency in plugin's Cargo.toml
-      for plugin in plugins/*/Cargo.toml; do
-        if [ -f "$plugin" ]; then
-          sed -i 's|git = "https://github.com/enigo-rs/enigo.git", rev = "[^"]*",|path = "${enigoSrcWithCargoLock}",|g' "$plugin"
-        fi
-      done
+      substituteInPlace plugins/com.amansprojects.starterpack.sdPlugin/build.ts \
+        --replace-fail '"--root", join(outDir, Deno.build.os)]' '"--root", join(outDir, Deno.build.os), "--locked"]'
     '';
 
     # - Sets DENO_DIR to the cached deno dependencies from previous derivation
@@ -211,7 +188,6 @@ let
 
       export DENO_DIR="${pluginDenoDeps}"
       export HOME="$TMPDIR"
-      export CARGO_HOME="$TMPDIR/cargo"
 
       mkdir -p target/plugins
       for plugin in plugins/*; do
@@ -361,7 +337,6 @@ rustPlatform.buildRustPackage {
       package = opendeck;
     };
     inherit
-      enigoSrcWithCargoLock
       frontend
       pluginDenoDeps
       plugins
@@ -370,7 +345,7 @@ rustPlatform.buildRustPackage {
 
   meta = {
     description = "Linux software for the Elgato Stream Deck with support for original Stream Deck plugins";
-    license = lib.licenses.mit;
+    license = lib.licenses.gpl3Plus;
     platforms = lib.platforms.linux;
     homepage = "https://github.com/nekename/opendeck";
     downloadPage = "https://github.com/nekename/opendeck/releases/tag/v${version}";

@@ -29,47 +29,38 @@ trap "rm -rf $TEMP_DIR" EXIT
 curl -sL "https://github.com/nekename/opendeck/archive/refs/tags/v${VERSION}.tar.gz" | tar xz -C "$TEMP_DIR"
 SRC_DIR="$TEMP_DIR/opendeck-${VERSION}"
 
-# Step 3: Generate main Cargo.lock
+# Step 3: Download deno.lock from the tagged release
+echo "==> Downloading deno.lock..."
+curl -sL "https://raw.githubusercontent.com/nekename/opendeck/v${VERSION}/deno.lock" -o "$SCRIPT_DIR/deno.lock"
+echo "    ✓ deno.lock updated"
+
+# Step 4: Generate main Cargo.lock
 echo "==> Generating main Cargo.lock..."
 cd "$SRC_DIR/src-tauri"
 cargo generate-lockfile
 cp Cargo.lock "$SCRIPT_DIR/Cargo.lock"
 echo "    ✓ Cargo.lock updated"
 
-# Step 4: Generate starterpack Cargo.lock
-echo "==> Generating starterpack Cargo.lock..."
-cd "$SRC_DIR/plugins/com.amansprojects.starterpack.sdPlugin"
+# Step 5: Copy starterpack Cargo.lock from source (with enigo as git dep)
+echo "==> Copying starterpack Cargo.lock..."
+PLUGIN_DIR="$SRC_DIR/plugins/com.amansprojects.starterpack.sdPlugin"
 
-# Check enigo version in Cargo.toml
-ENIGO_REV=$(grep -oP 'git = "https://github.com/enigo-rs/enigo.git", rev = "\K[^"]+' Cargo.toml || echo "")
+# Check if the plugin still uses enigo as a git dependency
+ENIGO_REV=$(grep -oP 'git = "https://github.com/enigo-rs/enigo.git", rev = "\K[^"]+' "$PLUGIN_DIR/Cargo.toml" || echo "")
 if [ -n "$ENIGO_REV" ]; then
     echo "    Found enigo rev: $ENIGO_REV"
-    
-    # Fetch enigo and generate its Cargo.lock
-    echo "==> Fetching enigo..."
-    ENIGO_DIR="$TEMP_DIR/enigo"
-    git clone --quiet https://github.com/enigo-rs/enigo.git "$ENIGO_DIR"
-    cd "$ENIGO_DIR"
-    git checkout --quiet "$ENIGO_REV"
-    
-    ENIGO_HASH=$(nix-prefetch-git --url https://github.com/enigo-rs/enigo.git --rev "$ENIGO_REV" 2>/dev/null | grep -oP '"hash": "\K[^"]+')
+
+    # Get the hash of the enigo git source for importCargoLock.outputHashes
+    ENIGO_HASH=$(nix-prefetch-git --url https://github.com/enigo-rs/enigo.git --rev "$ENIGO_REV" 2>/dev/null | grep '"hash"' | grep -oP '"sha256-[^"]+"' | tr -d '"')
     echo "    enigoHash = \"$ENIGO_HASH\""
-    
-    echo "==> Generating enigo Cargo.lock..."
-    cargo generate-lockfile
-    cp Cargo.lock "$SCRIPT_DIR/enigo-Cargo.lock"
-    echo "    ✓ enigo-Cargo.lock updated"
-    
-    # Now generate starterpack lock with path dependency
-    cd "$SRC_DIR/plugins/com.amansprojects.starterpack.sdPlugin"
-    sed -i "s|git = \"https://github.com/enigo-rs/enigo.git\", rev = \"[^\"]*\"|path = \"$ENIGO_DIR\"|g" Cargo.toml
 fi
 
-cargo generate-lockfile
-cp Cargo.lock "$SCRIPT_DIR/starterpack-Cargo.lock"
+# Use the upstream Cargo.lock as-is (it has enigo as a git dep, which importCargoLock
+# handles via outputHashes — no machine-specific path hacks needed)
+cp "$PLUGIN_DIR/Cargo.lock" "$SCRIPT_DIR/starterpack-Cargo.lock"
 echo "    ✓ starterpack-Cargo.lock updated"
 
-# Step 5: Calculate FOD hashes (these will fail first time, need manual update)
+# Step 6: Calculate FOD hashes (these will fail first time, need manual update)
 echo "==> Calculating FOD hashes..."
 echo "    You need to update package.nix with the hashes above, then run:"
 echo "    nix-build -A opendeck.frontend 2>&1 | grep 'got:'"
@@ -77,22 +68,21 @@ echo "    nix-build -A opendeck.pluginDenoDeps 2>&1 | grep 'got:'"
 echo ""
 echo "    Or let them fail and copy the 'got:' hashes from the error messages"
 
-# Step 6: Summary
+# Step 7: Summary
 echo ""
 echo "==> Summary of changes needed in package.nix:"
 echo "    version = \"$VERSION\";"
 echo "    srcHash = \"sha256-${SRC_HASH}\";"
-if [ -n "$ENIGO_REV" ]; then
-    echo "    enigoRev = \"$ENIGO_REV\";"
+if [ -n "${ENIGO_REV:-}" ]; then
+    ENIGO_VERSION=$(grep -A2 'name = "enigo"' "$PLUGIN_DIR/Cargo.lock" | grep 'version' | grep -oP '[\d.]+')
     echo "    enigoHash = \"$ENIGO_HASH\";"
+    echo "    (outputHashes key should be: \"enigo-${ENIGO_VERSION}\")"
 fi
 echo ""
 echo "==> Lock files updated:"
+echo "    ✓ deno.lock"
 echo "    ✓ Cargo.lock"
 echo "    ✓ starterpack-Cargo.lock"
-if [ -n "$ENIGO_REV" ]; then
-    echo "    ✓ enigo-Cargo.lock"
-fi
 echo ""
 echo "==> Next steps:"
 echo "    1. Update version and hashes in package.nix"
