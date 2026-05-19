@@ -194,7 +194,7 @@ let
         if [ -d "$plugin" ]; then
           plugin_name=$(basename "$plugin")
           plugin_out="$PWD/target/plugins/$plugin_name"
-          
+
           cd "$plugin"
           deno run --allow-all build.ts "$plugin_out" "${stdenv.hostPlatform.rust.rustcTarget}"
           cd "$OLDPWD"
@@ -321,10 +321,10 @@ rustPlatform.buildRustPackage {
   postInstall = ''
         # Install udev rules
         install -Dm644 src-tauri/bundle/40-streamdeck.rules -t $out/lib/udev/rules.d/
-        
+
         # Install icon
         install -Dm644 src-tauri/icons/icon.png $out/share/pixmaps/opendeck.png
-        
+
         # Create a desktop file
         mkdir -p $out/share/applications
         cat > $out/share/applications/opendeck.desktop << EOF
