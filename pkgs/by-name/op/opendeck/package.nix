@@ -48,8 +48,8 @@ let
   };
 
   # Fixed Output Derivation (FOD) output hashes
-  frontendHash = "sha256-vbOp4tDiDtcdk5fblLiXELwZTTRcrkrycgZ7tXqDBac=";
-  pluginDenoDepsHash = "sha256-+1Y8PZjuQnY/u+2gdoSvkckosw8OhgbUd8aI+rq+z4I=";
+  frontendHash = "sha256-QYcjOeXMOsvZRI7cDoCaff0VbMOVDmMx5nQJ7eR/yNY=";
+  pluginDenoDepsHash = "sha256-I/N+VA2/s5sUJzPeUJ0eY7d+PcBeJbdufpI2EnjGL7w=";
 
   # Additional output hashes of plugin cargo dependencies that need to be specified
   pluginCargoOutputHashes = {
@@ -76,14 +76,11 @@ let
 
     nativeBuildInputs = [ deno ];
 
-    # Provide our vendored deno.lock to make the FOD reproducible
-    preBuild = ''
-      cp ${./deno.lock} deno.lock
-    '';
-
+    # Provide our vendored deno.lock to make the FOD reproducible and build the frontend
     buildPhase = ''
       runHook preBuild
 
+      cp ${./deno.lock} deno.lock
       export DENO_DIR="$TMPDIR/deno"
       deno install --frozen
       deno task build
@@ -115,14 +112,13 @@ let
 
     nativeBuildInputs = [ deno ];
 
-    # Provide our vendored deno.lock to make the FOD reproducible
-    preBuild = ''
-      cp ${./deno.lock} deno.lock
-    '';
+    dontInstall = true;
 
+    # Provide our vendored deno.lock to make the FOD reproducible and build the deno dependencies
     buildPhase = ''
       runHook preBuild
 
+      cp ${./deno.lock} deno.lock
       export DENO_DIR="$out"
       for plugin in plugins/*; do
         if [ -d "$plugin" ] && [ -f "$plugin/build.ts" ]; then
@@ -348,11 +344,12 @@ rustPlatform.buildRustPackage {
 
   meta = {
     description = "Linux software for the Elgato Stream Deck with support for original Stream Deck plugins";
-    license = lib.licenses.gpl3Plus;
-    platforms = lib.platforms.linux;
     homepage = "https://github.com/nekename/opendeck";
     downloadPage = "https://github.com/nekename/opendeck/releases/tag/v${version}";
     changelog = "https://github.com/nekename/opendeck/releases/tag/v${version}";
+    license = lib.licenses.gpl3Plus;
+    platforms = lib.platforms.linux;
+    mainProgram = "opendeck";
     maintainers = with lib.maintainers; [ Kitt3120 ];
   };
 }
